@@ -238,10 +238,19 @@ class IcedID1:
 
         return potential_keys
 
+    def get_section_list(self):
+        self.section_list = []
 
+        for section in self.pe.sections:
+            temp_section = section.Name.decode('utf-8').rstrip('\x00')
+            if temp_section in ('.data', '.rdata') or 'dos' in temp_section:
+                self.section_list.append(temp_section)            
 
     def get_data_blob(self):
-        for section in ('.data', '.rdata'):
+
+        self.get_section_list()
+
+        for section in self.section_list:
             data = get_section(self.pe, section).get_data()
             m = re.findall(rb'([0-9a-fA-F]{1000,})', data)
             if len(m):
