@@ -40,7 +40,8 @@ def hook_api_hash(state):
     """
     # symbolize return value
     state.regs.rax = claripy.BVS('ret', 64)
-    
+   
+
 class PackerError(Exception):
     pass
     
@@ -56,7 +57,9 @@ class SPLCryptUnpacker:
 
         self.marker = b'|SPL|'
 
-        # sanity check
+        # 
+        # 1. get data blobs / sanity check
+        #
         self.raw_data = self.get_data_blobs()
         if not len(self.raw_data):
             raise PackerError("cannot extract data blob")
@@ -70,17 +73,14 @@ class SPLCryptUnpacker:
 
 
     def split(self, data):
+        ''' split at marker
+        '''
         return data.split(self.marker)
 
 
     def unpack(self):
         ''' process samples and returns a list of unpacked resources
         '''
-        #
-        # 1. get data blobs
-        #
-
-
         # sometimes there's no need to decrypt anything
         # ex: 2409da563ce216dee99fc9c016d5a2b1d8edcdfe5cc74ddf72fcb6ab5a5fdb3e
         for blob in self.raw_data:
@@ -100,7 +100,7 @@ class SPLCryptUnpacker:
         potential_keys = self.find_key()
 
         if not len(potential_keys):
-            PackerError("couldnt find any potential key")
+            raise PackerError("couldnt find any potential key")
         print("found %s potential keys: %r"%(len(potential_keys), potential_keys))
 
 
@@ -113,7 +113,7 @@ class SPLCryptUnpacker:
                 break
 
         if blob is None:
-            PackerError("failed to decrypt")
+            raise PackerError("failed to decrypt")
 
         print("decrypted data: 0x%x bytes"%len(blob))
 
@@ -309,10 +309,13 @@ class SPLCryptUnpacker:
             if key:
                 potential_keys.append(key)
 
-        return potential_keys
+        return set(potential_keys)
 
 
     def decompress(self, blob):
+        ''' if header is right but later chunks were put in an incorrect
+        order, there's a chance of segfault here
+        '''
         try:
             return quicklz.decompress(blob)
         except:
@@ -356,7 +359,10 @@ class SPLCryptUnpacker:
             # string_size[3] = 1;           <-- not picked by the regex
 
             dat = []
-            for d in [''.join(_) for _ in itertools.permutations(m)]:
+            # in case of multiple chunks, if the first one is in correct place
+            # (ie: the header is right), but some later chunks are in the wrong
+            # order, there's a possibility that quicklz segfaults...
+            for d in sorted([''.join(_) for _ in itertools.permutations(m)]):
                 # fix odd length
                 # this is _fix_blob() are ugly work arounds...
                 if len(d) % 2 != 0:
@@ -412,7 +418,7 @@ def extract_icedid_config(filename):
     try:
         data = get_section(pe, ".d").get_data()
     except:
-        return None
+        return {}
 
     key = data[:0x20]
     conf = data[0x40:0x40+0x20]
