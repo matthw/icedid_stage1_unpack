@@ -1,5 +1,9 @@
-# icedid_stage1_unpack
-Automatically Unpack Icedid Stage 1 using symbolic execution
+# IcedID / Bazarloader stage 1 SPLCrypt Unpacker
+
+Automatically Unpack IcedId/Bazarloader Stage 1 using symbolic execution
+
+Turned out as more or less generic [SPLCrypt](https://bazaar.abuse.ch/browse.php?search=yara%3ASPLCrypt) unpacker.
+
 
 Full post: [https://matth.dmz42.org/posts/2022/automatically-unpacking-icedid-stage1-with-angr/](https://matth.dmz42.org/posts/2022/automatically-unpacking-icedid-stage1-with-angr/)
 

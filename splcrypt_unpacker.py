@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-# unpack IcedID first stage
+#
+# SPLCrypt unpacker
+
+# unpack IcedID/Bazarloader first stages
 # author: Matthieu Walter (@matth_walter)
 
 from arc4 import ARC4
@@ -37,11 +40,26 @@ def hook_api_hash(state):
     # symbolize return value
     state.regs.rax = claripy.BVS('ret', 64)
     
+class PackerError(Exception):
+    pass
+    
 
-class IcedID1:
+class SPLCryptUnpacker:
     def __init__(self, filename):
         self.filename = filename
-        self.pe = pefile.PE(filename)
+        
+        try:
+            self.pe = pefile.PE(filename)
+        except pefile.PEFormatError as e:
+            raise PackerError(str(e))
+
+        self.marker = b'|SPL|'
+
+        # sanity check
+        self.raw_data = self.get_data_blobs()
+        if not len(self.raw_data):
+            raise PackerError("cannot extract data blob")
+
 
         # angr
         self.prj = angr.Project(filename, load_options={'auto_load_libs': False})
@@ -49,6 +67,60 @@ class IcedID1:
 
         self.hooks = []
 
+
+    def split(self, data):
+        return data.split(self.marker)
+
+
+    def unpack(self):
+        ''' process samples and returns a list of unpacked resources
+        '''
+        #
+        # 1. get data blobs
+        #
+
+
+        # sometimes there's no need to decrypt anything
+        # ex: 2409da563ce216dee99fc9c016d5a2b1d8edcdfe5cc74ddf72fcb6ab5a5fdb3e
+        for blob in self.raw_data:
+            try:
+                data = quicklz.decompress(blob)
+            except ValueError:
+                continue
+
+            if data is not None:
+                print("apparently it wasnt encrypted...")
+                return self.split(data)
+
+
+        #
+        # 2. get potential keys
+        #
+        potential_keys = self.find_key()
+
+        if not len(potential_keys):
+            PackerError("couldnt find any potential key")
+        print("found %s potential keys: %r"%(len(potential_keys), potential_keys))
+
+
+        #
+        # 3. try to decrypt
+        #
+        for blob in self.raw_data:
+            blob = self.try_to_decrypt(blob, potential_keys)
+            if blob is not None:
+                break
+
+        if blob is None:
+            PackerError("failed to decrypt")
+
+        print("decrypted data: 0x%x bytes"%len(blob))
+
+
+        #
+        # 4. Split
+        #
+        return self.split(blob)
 
 
     def emulate(self, start_addr, stop_addr, max_iter=3000):
@@ -240,56 +312,67 @@ class IcedID1:
 
 
 
-    def get_data_blob(self):
-        for section in ('.data', '.rdata'):
-            data = get_section(self.pe, section).get_data()
-            m = re.findall(rb'([0-9a-fA-F]{1000,})', data)
-            if len(m):
-                return bytes.fromhex(str(m[0], 'ascii'))
-        raise Exception("cannot find data blob")
+    def get_data_blobs(self):
+        data = open(self.filename, 'rb').read()
+        m = re.findall(rb'([0-9a-fA-F]{1000,})', data)
+        if len(m):
+            m = [str(_, 'ascii') for _ in m]
+            # naive bazarloader handling where the data blob is split in 2 section
+            # and merged
+            if len(m) == 2:
+                return (bytes.fromhex(m[1] + m[0]), bytes.fromhex(m[0] + m[1]))
+            elif len(m) == 1:
+                return (bytes.fromhex(m[0]), )
+        return ()
     
 
 
-def try_to_decrypt(data, potential_keys):
-    ''' try all keys with xor and without
-        it seems the xor is not always applied
-    '''
-    for key in potential_keys:
-        for apply_xor in [True, False]:
-            print("trying key %r / xor=%r"%(key, apply_xor))
-            dec = decrypt(data, key, apply_xor)
-            if dec is not None:
-                return dec
+    def try_to_decrypt(self, data, potential_keys):
+        ''' try all keys with xor and without
+             it seems the xor is not always applied
+        '''
+        for key in potential_keys:
+            for apply_xor in [True, False]:
+                print("trying key %r / xor=%r"%(key, apply_xor))
+                dec = self.decrypt(data, key, apply_xor)
+                if dec is not None:
+                    return dec
 
-    return None
-
-
-
-def decrypt(data, key, apply_xor):
-    ''' decrypt + decompress data
-    '''
-
-    # RC4 decrypt
-    cipher = ARC4(key)
-    dec = bytearray(cipher.decrypt(data))
-
-    # dexor
-    if apply_xor:
-        for x in range(len(dec) - 1):
-            dec[x] = ((dec[x] ^ key[x % len(key)]) - dec[x + 1]) & 0xff
-
-    # Quick check we got valid data
-    # ref: quicklz format: https://github.com/ReSpeak/quicklz/blob/master/Format.md
-    # DWORD at decrypted data+1 should be the length
-    if u32(dec[1:5]) == len(data):
-        return quicklz.decompress(bytes(dec))
+        return None
 
 
 
-def extract_c2(filename):
+    def decrypt(self, data, key, apply_xor):
+        ''' decrypt + decompress data
+        '''
+
+        # RC4 decrypt
+        cipher = ARC4(key)
+        dec = bytearray(cipher.decrypt(data))
+
+        # dexor
+        if apply_xor:
+            for x in range(len(dec) - 1):
+                dec[x] = ((dec[x] ^ key[x % len(key)]) - dec[x + 1]) & 0xff
+
+        # Quick check we got valid data
+        # ref: quicklz format: https://github.com/ReSpeak/quicklz/blob/master/Format.md
+        # DWORD at decrypted data+1 should be the length
+        if u32(dec[1:5]) == len(data):
+            return quicklz.decompress(bytes(dec))
+
+        return None
+
+
+
+def extract_icedid_config(filename):
     pe = pefile.PE(filename)
 
-    data = get_section(pe, ".d").get_data()
+    try:
+        data = get_section(pe, ".d").get_data()
+    except:
+        return None
+
     key = data[:0x20]
     conf = data[0x40:0x40+0x20]
     data = xor(key, conf)
@@ -311,41 +394,12 @@ def main():
         print("%s <file>"%sys.argv[0])
         sys.exit(1)
 
-    ice_ice_baby = IcedID1(sys.argv[1])
-
-    #
-    # 1. get data blob
-    #
-    data = ice_ice_baby.get_data_blob()
- 
-    if not len(data):
-        error("cannot get data blob")
-    print("got data blob: 0x%x bytes"%len(data))
-    
-    #
-    # 2. get potential key
-    #
-    potential_keys = ice_ice_baby.find_key()
-    if not len(potential_keys):
-        error("couldnt find any potential key")
-    print("found %s potential keys: %r"%(len(potential_keys), potential_keys))
-
-
-    #
-    # 3. try to decrypt
-    #
-    data = try_to_decrypt(data, potential_keys)
-
-    if data is None:
-        error("failed to decrypt")
-
-    print("decrypted data: 0x%x bytes"%len(data))
-
-    #
-    # 4. split data / dump config
-    #
-    files = data.split(b'|SPL|')
-    print("found %d elements"%len(files))
+    try:
+        unpacker = SPLCryptUnpacker(sys.argv[1])
+        files = unpacker.unpack()
+        print("found %d elements"%len(files))
+    except PackerError as e:
+        error(str(e))
 
     for n, dat in enumerate(files):
         fname = sys.argv[1] + ".extracted.%d"%n
@@ -356,7 +410,7 @@ def main():
         # losy PE check
         if dat.startswith(b'MZ'):
             print("    looks like a PE... ", end='')
-            print(extract_c2(fname))
+            print(extract_icedid_config(fname))
 
 
 if __name__ == "__main__":
