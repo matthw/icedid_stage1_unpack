@@ -13,6 +13,7 @@ import re
 import angr
 import logging
 import claripy
+import itertools
 from arc4 import ARC4
 from malduck import u32, p32, xor
 
@@ -84,7 +85,7 @@ class SPLCryptUnpacker:
         # ex: 2409da563ce216dee99fc9c016d5a2b1d8edcdfe5cc74ddf72fcb6ab5a5fdb3e
         for blob in self.raw_data:
             try:
-                data = quicklz.decompress(blob)
+                data = self.decompress(blob)
             except ValueError:
                 continue
 
@@ -311,6 +312,27 @@ class SPLCryptUnpacker:
         return potential_keys
 
 
+    def decompress(self, blob):
+        try:
+            return quicklz.decompress(blob)
+        except:
+            # try with a fixed blob ?
+            blob = self._fix_blob(blob)
+            if blob is not None:
+                return quicklz.decompress(blob)
+            raise ValueError
+
+
+    def _fix_blob(self, blob):
+        ''' in case of multiple blobs it seems there could be a few missing bytes
+        we check that the quicklz compressed size header is 1 to 3 bytes smaller
+        than the data we have and append the correct number of bytes from the marker
+        '''
+        diff = u32(blob[1:5]) - len(blob)
+        if 0 < diff and diff < 3:
+            return blob + self.marker[::-diff]
+        return None
+
 
     def get_data_blobs(self):
         data = open(self.filename, 'rb').read()
@@ -319,11 +341,30 @@ class SPLCryptUnpacker:
             m = [str(_, 'ascii') for _ in m]
             # naive bazarloader handling where the data blob is split in 2 section
             # and merged
-            if len(m) == 2:
-                return (bytes.fromhex(m[1] + m[0]), bytes.fromhex(m[0] + m[1]))
-            elif len(m) == 1:
-                return (bytes.fromhex(m[0]), )
-        return ()
+            # not really optimized or memory efficient....
+            # sometimes there's like 1 byte of data which is not picked by the regex
+            # just put something random so it doesnt crash, very dirty solution.
+            # 
+            # ex: 4a5f37ff394af7a750b1933c3e77b927043e933bfa715c917c824fbc645c940c
+            # string[0] = &DAT_180051010;
+            # string[1] = &DAT_180037000;
+            # string[2] = &DAT_18001d000;
+            # string[3] = &DAT_180051000;
+            # string_size[0] = 0x1976f;
+            # string_size[1] = 0x1976f;
+            # string_size[2] = 0x1976f;
+            # string_size[3] = 1;           <-- not picked by the regex
+
+            dat = []
+            for d in [''.join(_) for _ in itertools.permutations(m)]:
+                # fix odd length
+                # this is _fix_blob() are ugly work arounds...
+                if len(d) % 2 != 0:
+                    d += '0'
+                dat.append(bytes.fromhex(d))
+            return dat
+
+        return []
     
 
 
@@ -359,7 +400,7 @@ class SPLCryptUnpacker:
         # ref: quicklz format: https://github.com/ReSpeak/quicklz/blob/master/Format.md
         # DWORD at decrypted data+1 should be the length
         if u32(dec[1:5]) == len(data):
-            return quicklz.decompress(bytes(dec))
+            return self.decompress(bytes(dec))
 
         return None
 
