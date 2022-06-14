@@ -4,6 +4,7 @@
 
 # unpack IcedID/Bazarloader first stages
 # author: Matthieu Walter (@matth_walter)
+#
 
 from arc4 import ARC4
 import pefile
@@ -90,7 +91,7 @@ class SPLCryptUnpacker:
                 continue
 
             if data is not None:
-                print("apparently it wasnt encrypted...")
+                print("apparently it wasn't encrypted...")
                 return self.split(data)
 
 
@@ -100,7 +101,7 @@ class SPLCryptUnpacker:
         potential_keys = self.find_key()
 
         if not len(potential_keys):
-            raise PackerError("couldnt find any potential key")
+            raise PackerError("couldn't find any potential key")
         print("found %s potential keys: %r"%(len(potential_keys), potential_keys))
 
 
@@ -250,11 +251,15 @@ class SPLCryptUnpacker:
 
 
         # get matching offsets
-        finds = rule.match(data=data)
+        yara_matches = rule.match(data=data)
         offsets = []
-        for find in finds['main'][0]['strings']:
+
+        if not len(yara_matches):
+            raise PackerError("no yara match")
+
+        for offset, _, _ in yara_matches[0].strings:
             # offset are relative to .text, rebase them
-            off = self.pe.OPTIONAL_HEADER.ImageBase + section.VirtualAddress + find['offset']
+            off = self.pe.OPTIONAL_HEADER.ImageBase + section.VirtualAddress + offset
             offsets.append(off)
 
         # list of (start_addr, stop_addr) to emulate
