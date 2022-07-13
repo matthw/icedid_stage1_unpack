@@ -125,7 +125,7 @@ class SPLCryptUnpacker:
         return self.split(blob)
 
 
-    def emulate(self, start_addr, stop_addr, max_iter=3000):
+    def emulate(self, start_addr, stop_addr, max_iter=5000):
         """ symbolic execution from start_addr to stop_addr.
         max_iter is the maximum number of instructions
 
@@ -412,6 +412,9 @@ class SPLCryptUnpacker:
         # DWORD at decrypted data+1 should be the length
         if u32(dec[1:5]) == len(data):
             return self.decompress(bytes(dec))
+        # newer sample are not compressed
+        if b'This program cannot be run in DOS mode.' in dec and dec.count(self.marker) > 1:
+            return bytes(dec)
 
         return None
 
